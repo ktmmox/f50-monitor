@@ -1,0 +1,89 @@
+name: Build F50 Monitor iOS 2.5 IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-ios-2.5.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout public iOS 2.5 source
+        uses: actions/checkout@v4
+        with:
+          repository: koldllc/f50-monitor
+          ref: 741984b434f5ee93578bdcc34c32490e975f5595
+          persist-credentials: false
+
+      - name: Select Xcode 16
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodebuild -version
+          cd iOS
+          xcodegen generate
+
+      - name: Build unsigned iPhone app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project iOS/F50Monitor-iOS.xcodeproj \
+            -scheme F50Monitor-iOS \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            build 2>&1 | tee build-ios.log
+
+      - name: Package and verify IPA
+        run: |
+          set -euo pipefail
+          APP=build/Build/Products/Release-iphoneos/F50Monitor-iOS.app
+          test -d "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist"
+          test -d "$APP/PlugIns/F50MonitorWidget.appex"
+          test -d "$APP/Frameworks/F50Core.framework"
+          mkdir -p package/Payload
+          cp -R "$APP" package/Payload/
+          cd package
+          /usr/bin/zip -r -q ../f50-monitor-ios-2.5-unsigned.ipa Payload
+          cd ..
+          unzip -t f50-monitor-ios-2.5-unsigned.ipa
+          shasum -a 256 f50-monitor-ios-2.5-unsigned.ipa > f50-monitor-ios-2.5-unsigned.ipa.sha256
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: F50-Monitor-iOS-2.5-unsigned
+          path: |
+            f50-monitor-ios-2.5-unsigned.ipa
+            f50-monitor-ios-2.5-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: F50-Monitor-iOS-build-log
+          path: build-ios.log
+          if-no-files-found: ignore
+          retention-days: 7
+
